@@ -1,0 +1,105 @@
+# Git and version control
+.git/
+.gitignore
+.github/
+
+# Allow docker entrypoint script
+!docker-entrypoint.sh
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation and markdown files (except README)
+*.md
+!README.md
+doc/
+
+# Log files
+logs/
+*.log
+
+# Cache directories
+cache/
+.cache/
+
+# Chat history (runtime data)
+chat_history/
+
+# Configuration backups
+*.backup
+conf.yaml
+conf.yaml.backup
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+nul
+
+# Package manager files
+node_modules/
+.npm/
+.yarn/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker files
+dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Development tools
+.coverage
+.pytest_cache/
+.tox/
+.nox/
+
+# Lock files (keep pyproject.toml, requirements.txt)
+*.lock
+!uv.lock
+
+# Models and large files (if they shouldn't be in container)
+# models/
+# *.bin
+# *.safetensors

@@ -1,0 +1,97 @@
+# 안정적인 미러 서버를 사용하는 GPU 최적화 버전
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04 AS dependencies
+
+# Set noninteractive mode and create user early
+ENV DEBIAN_FRONTEND=noninteractive
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# 한국 미러 서버로 변경하여 Hash Sum mismatch 문제 해결
+RUN cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
+    sed -i 's|http://archive.ubuntu.com/ubuntu|http://kr.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.ubuntu.com/ubuntu|http://kr.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+
+# Install system dependencies and create directory structure in one layer
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ffmpeg \
+    curl \
+    libxcb-xfixes0 \
+    libxcb-shape0 && \
+    pip install --no-cache-dir uv && \
+    mkdir -p /app && \
+    chown -R appuser:appuser /app && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Switch to non-root user early
+USER appuser
+WORKDIR /app
+
+# Copy dependency files and install packages in one optimized layer
+COPY --chown=appuser:appuser requirements.txt pyproject.toml ./
+RUN uv sync --no-dev && \
+    uv add funasr modelscope huggingface_hub pywhispercpp torch torchaudio edge-tts azure-cognitiveservices-speech py3-tts && \
+    uv cache clean && \
+    find ~/.cache -type f -delete 2>/dev/null || true && \
+    find /tmp -type f -delete 2>/dev/null || true
+
+# Final production stage with Korean mirror
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04 AS production
+
+# Copy pre-installed dependencies and user setup
+COPY --from=dependencies /etc/passwd /etc/group /etc/
+COPY --from=dependencies --chown=appuser:appuser /app /app
+
+# 한국 미러 서버로 변경
+RUN cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
+    sed -i 's|http://archive.ubuntu.com/ubuntu|http://kr.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.ubuntu.com/ubuntu|http://kr.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+
+# Install minimal runtime dependencies only
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    curl \
+    libxcb-xfixes0 \
+    libxcb-shape0 && \
+    pip install --no-cache-dir uv && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+USER appuser
+WORKDIR /app
+
+# Copy application files in optimized order (smallest to largest)
+COPY --chown=appuser:appuser run_server.py ./
+COPY --chown=appuser:appuser characters/ ./characters/
+COPY --chown=appuser:appuser prompts/ ./prompts/
+COPY --chown=appuser:appuser config_templates/ ./config_templates/
+COPY --chown=appuser:appuser avatars/ ./avatars/
+COPY --chown=appuser:appuser backgrounds/ ./backgrounds/
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser frontend/ ./frontend/
+COPY --chown=appuser:appuser live2d-models/ ./live2d-models/
+
+# Create runtime directories and set permissions in final step
+RUN mkdir -p logs cache chat_history && \
+    chmod +x run_server.py
+
+# Expose port 12393
+EXPOSE 12393
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:12393/health || exit 1
+
+# Default command
+CMD ["uv", "run", "run_server.py"]

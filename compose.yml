@@ -1,0 +1,22 @@
+services:
+  openllmvtuber:
+    build: .
+    ports:
+      - "12393:12393"
+    volumes:
+      - ./chat_history:/app/chat_history
+      - ./conf.yaml:/app/conf.yaml
+      - ./live2d-models:/app/live2d-models
+      - ./model_dict.json:/app/model_dict.json
+    runtime: nvidia
+  openllmvtuber-cpu:
+    build:
+      context: .
+      dockerfile: dockerfile.cpu
+    ports:
+      - "12393:12393"
+    volumes:
+      - ./chat_history:/app/chat_history
+      - ./conf.yaml:/app/conf.yaml
+    # entrypoint: uv run run_server.py
+    # entrypoint: tail -f /dev/null

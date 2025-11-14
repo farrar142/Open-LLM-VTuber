@@ -1,0 +1,60 @@
+# Micro-optimized CPU-only version (최소 크기)
+FROM python:3.11-alpine AS micro
+
+# Install minimal runtime dependencies
+RUN apk add --no-cache \
+    ffmpeg \
+    curl \
+    libxcb \
+    shadow && \
+    pip install --no-cache-dir uv
+
+# Create user and app structure early
+RUN addgroup -g 1000 appuser && \
+    adduser -D -u 1000 -G appuser appuser && \
+    mkdir -p /app && \
+    chown appuser:appuser /app
+
+# Copy and set up entrypoint script (as root before switching user)
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+USER appuser
+WORKDIR /app
+
+# Configure uv to use a consistent virtual environment location
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Install only essential Python packages
+COPY --chown=appuser:appuser requirements.txt pyproject.toml ./
+RUN uv sync --no-dev && \
+    uv add edge-tts azure-cognitiveservices-speech && \
+    uv add torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+    # 캐시는 유지하되 임시 파일만 정리
+    find /tmp -type f -delete 2>/dev/null || true
+
+# Copy only essential files (최소한의 파일만)
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser run_server.py ./
+COPY --chown=appuser:appuser config_templates/ ./config_templates/
+COPY --chown=appuser:appuser frontend/ ./frontend/
+
+# Create minimal runtime structure
+RUN mkdir -p logs cache chat_history && \
+    chmod +x run_server.py && \
+    # 가상환경 경로 확인
+    ls -la /app/.venv/bin/ || true
+
+EXPOSE 12393
+
+# Minimal health check
+HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=2 \
+    CMD curl -f http://localhost:12393/health || exit 1
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Default command - 이제 entrypoint가 가상환경을 활성화해줍니다
+CMD ["python", "run_server.py"]

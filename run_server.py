@@ -13,6 +13,20 @@ from upgrade_codes.upgrade_manager import UpgradeManager
 from src.open_llm_vtuber.server import WebSocketServer
 from src.open_llm_vtuber.config_manager import Config, read_yaml, validate_config
 
+# Add CUDA and cuDNN DLL directories to PATH for Windows
+if sys.platform == "win32":
+    cuda_path = Path(
+        os.environ.get(
+            "CUDA_PATH", "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.9"
+        )
+    )
+    cuda_bin = cuda_path / "bin"
+    if cuda_bin.exists():
+        # Add CUDA bin directory to DLL search path
+        os.add_dll_directory(str(cuda_bin))
+        # Also add to PATH for subprocess calls
+        os.environ["PATH"] = f"{cuda_bin};{os.environ.get('PATH', '')}"
+
 os.environ["HF_HOME"] = str(Path(__file__).parent / "models")
 os.environ["MODELSCOPE_CACHE"] = str(Path(__file__).parent / "models")
 

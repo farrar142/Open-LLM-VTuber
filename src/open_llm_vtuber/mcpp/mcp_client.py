@@ -1,5 +1,8 @@
 """MCP Client for Open-LLM-Vtuber."""
 
+import asyncio
+import platform
+import warnings
 from contextlib import AsyncExitStack
 from typing import Dict, Any, List, Callable
 from loguru import logger
@@ -14,6 +17,27 @@ from .server_registry import ServerRegistry
 DEFAULT_TIMEOUT = timedelta(seconds=30)
 
 
+def suppress_subprocess_warnings() -> None:
+    """Suppress subprocess-related ResourceWarnings on Windows.
+
+    This addresses the known issue where subprocess transports are not
+    properly closed by the MCP library on Windows, causing ResourceWarnings
+    about unclosed transports.
+    """
+    if platform.system() == "Windows":
+        warnings.filterwarnings(
+            "ignore", category=ResourceWarning, message=".*unclosed transport.*"
+        )
+        warnings.filterwarnings(
+            "ignore",
+            category=ResourceWarning,
+            message=".*I/O operation on closed pipe.*",
+        )
+        logger.debug(
+            "🔇 Suppressed subprocess ResourceWarnings for Windows compatibility"
+        )
+
+
 class MCPClient:
     """MCP Client for Open-LLM-Vtuber.
     Manages persistent connections to multiple MCP servers.
@@ -22,15 +46,15 @@ class MCPClient:
     def __init__(
         self,
         server_registery: ServerRegistry,
-        send_text: Callable = None,
-        client_uid: str = None,
+        send_text: Callable | None = None,
+        client_uid: str | None = None,
     ) -> None:
         """Initialize the MCP Client."""
         self.exit_stack: AsyncExitStack = AsyncExitStack()
         self.active_sessions: Dict[str, ClientSession] = {}
         self._list_tools_cache: Dict[str, List[Tool]] = {}  # Cache for list_tools
-        self._send_text: Callable = send_text
-        self._client_uid: str = client_uid
+        self._send_text: Callable | None = send_text
+        self._client_uid: str | None = client_uid
 
         if isinstance(server_registery, ServerRegistry):
             self.server_registery = server_registery
@@ -38,7 +62,11 @@ class MCPClient:
             raise TypeError(
                 "MCPC: Invalid server manager. Must be an instance of ServerRegistry."
             )
-        logger.info("MCPC: Initialized MCPClient instance.")
+
+        # Suppress subprocess-related warnings on Windows
+        suppress_subprocess_warnings()
+
+        logger.info("✅ MCPC: Initialized MCPClient instance.")
 
     async def _ensure_server_running_and_get_session(
         self, server_name: str
@@ -57,25 +85,31 @@ class MCPClient:
         timeout = server.timeout if server.timeout else DEFAULT_TIMEOUT
 
         server_params = StdioServerParameters(
-            command=server.command, args=server.args, env=server.env, cwd=server.cwd
+            command=server.command, args=server.args, env=server.env
         )
 
         try:
+            logger.debug(f"🔄 MCPC: Creating stdio transport for '{server_name}'...")
             stdio_transport = await self.exit_stack.enter_async_context(
                 stdio_client(server_params)
             )
             read, write = stdio_transport
 
+            logger.debug(f"🔄 MCPC: Initializing session for '{server_name}'...")
             session = await self.exit_stack.enter_async_context(
                 ClientSession(read, write, read_timeout_seconds=timeout)
             )
             await session.initialize()
 
             self.active_sessions[server_name] = session
-            logger.info(f"MCPC: Successfully connected to server '{server_name}'.")
+            logger.info(f"✅ MCPC: Successfully connected to server '{server_name}'.")
             return session
         except Exception as e:
-            logger.exception(f"MCPC: Failed to connect to server '{server_name}': {e}")
+            logger.error(f"❌ MCPC: Failed to connect to server '{server_name}': {e}")
+            if "I/O operation on closed pipe" in str(e):
+                logger.debug(
+                    "💡 This error is often related to Windows subprocess handling. The system will continue to work."
+                )
             raise RuntimeError(
                 f"MCPC: Failed to connect to server '{server_name}'."
             ) from e
@@ -111,11 +145,14 @@ class MCPClient:
         response = await session.call_tool(tool_name, tool_args)
 
         if response.isError:
-            error_text = (
-                response.content[0].text
-                if response.content and hasattr(response.content[0], "text")
-                else "Unknown server error"
-            )
+            error_text = "Unknown server error"
+            if response.content:
+                for item in response.content:
+                    # Use getattr to safely access text attribute
+                    text_content = getattr(item, "text", None)
+                    if text_content:
+                        error_text = text_content
+                        break
             logger.error(f"MCPC: Error calling tool '{tool_name}': {error_text}")
             # Return error information within the standard structure
             return {
@@ -156,14 +193,34 @@ class MCPClient:
 
     async def aclose(self) -> None:
         """Closes all active server connections."""
+        session_count = len(self.active_sessions)
         logger.info(
-            f"MCPC: Closing client instance and {len(self.active_sessions)} active connections..."
+            f"🔄 MCPC: Closing client instance and {session_count} active connections..."
         )
-        await self.exit_stack.aclose()
+
+        # Log session cleanup
+        for server_name in self.active_sessions.keys():
+            logger.debug(
+                f"🔄 MCPC: Preparing to close session for server '{server_name}'"
+            )
+
+        try:
+            await self.exit_stack.aclose()
+            logger.debug("✅ MCPC: Exit stack closed successfully")
+        except Exception as e:
+            logger.warning(f"⚠️ MCPC: Error closing exit stack: {e}")
+            # Continue cleanup even if exit stack fails
+
         self.active_sessions.clear()
         self._list_tools_cache.clear()  # Clear cache on close
         self.exit_stack = AsyncExitStack()
-        logger.info("MCPC: Client instance closed.")
+
+        # Give a moment for cleanup on Windows to prevent resource warnings
+        if platform.system() == "Windows":
+            logger.debug("⏱️ MCPC: Waiting for Windows subprocess cleanup...")
+            await asyncio.sleep(0.1)
+
+        logger.info("✅ MCPC: Client instance closed successfully.")
 
     async def __aenter__(self) -> "MCPClient":
         """Enter the async context manager."""
